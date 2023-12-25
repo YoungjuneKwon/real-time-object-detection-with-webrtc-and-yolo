@@ -162,17 +162,38 @@ async def index(request):
     content = open(os.path.join(ROOT, "index.html"), "r").read()
     return web.Response(content_type="text/html", text=content)
 
-
 async def javascript(request):
     content = open(os.path.join(ROOT, "client.js"), "r").read()
     return web.Response(content_type="application/javascript", text=content)
 
+async def myIceServers(request):
+    content = open(os.path.join(ROOT, "myIceServers.json"), "r").read()
+    return web.Response(content_type="application/json", text=content)
 
+async def save_to_file(track):
+    print('Saving to file')
+    video = cv2.VideoWriter('test.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, (640, 480))
+    idx = 0
+    while True:
+        print(f'Waiting for frame {idx}')
+        frame = await track.recv()
+        print(f'Frame {idx} received')
+        idx += 1
+        video.write(frame.to_ndarray(format="bgr24"))
+
+def add_event_handler_for_new_track_on_peer_connection(pc):
+    @pc.on("track")
+    def on_track(track):
+        print("Track %s received" % track.kind)
+        if track.kind == "video":
+            asyncio.create_task(save_to_file(track))
+            
 async def offer(request):
     params = await request.json()
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
 
     pc = RTCPeerConnection()
+    add_event_handler_for_new_track_on_peer_connection(pc)
     pcs.add(pc)
 
     @pc.on("connectionstatechange")
@@ -183,9 +204,9 @@ async def offer(request):
             pcs.discard(pc)
 
     # open media source
-    video = create_local_tracks()
-    if video:
-        pc.addTrack(YOLOVideoStreamTrack())
+    #video = create_local_tracks()
+    #if video:
+    #    pc.addTrack(YOLOVideoStreamTrack())
 
     await pc.setRemoteDescription(offer)
 
@@ -226,4 +247,5 @@ if __name__ == "__main__":
     app.router.add_get("/", index)
     app.router.add_get("/client.js", javascript)
     app.router.add_post("/offer", offer)
+    app.router.add_get("/myIceServers", myIceServers)
     web.run_app(app, host=args.host, port=args.port)

@@ -1,9 +1,16 @@
 var pc = null;
+var peerConnectionConfig = {};
+
+(async () => {
+  const response = await fetch('/myIceServers');
+  const iceServers = await response.json();
+  peerConnectionConfig.iceServers = iceServers;
+})();
 
 function negotiate() {
     pc.addTransceiver('video', {direction: 'recvonly'});
     pc.addTransceiver('audio', {direction: 'recvonly'});
-    return pc.createOffer().then(function(offer) {
+    return pc.createOffer({offerToReceiveVideo: 1}).then(function(offer) {
         return pc.setLocalDescription(offer);
     }).then(function() {
         // wait for ICE gathering to complete
@@ -41,17 +48,20 @@ function negotiate() {
     });
 }
 
-function start() {
+async function start() {
     var config = {
-        sdpSemantics: 'unified-plan'
+      sdpSemantics: 'unified-plan'
     };
 
+    config.iceServers = peerConnectionConfig.iceServers;
     if (document.getElementById('use-stun').checked) {
         config.iceServers = [{urls: ['stun:stun.l.google.com:19302']}];
     }
 
     pc = new RTCPeerConnection(config);
-
+    const stream = await navigator.mediaDevices.getUserMedia({video: true})
+    stream.getTracks().forEach(t => pc.addTrack(t, stream))
+    
     // connect audio / video
     pc.addEventListener('track', function(evt) {
         if (evt.track.kind == 'video') {
