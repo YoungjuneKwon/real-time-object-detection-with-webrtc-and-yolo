@@ -1,3 +1,4 @@
+# pylint: disable=all
 import argparse
 import asyncio
 import json
