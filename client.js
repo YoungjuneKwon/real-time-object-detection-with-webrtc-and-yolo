@@ -59,7 +59,7 @@ async function start() {
     }
 
     pc = new RTCPeerConnection(config);
-    const stream = await navigator.mediaDevices.getUserMedia({video: true})
+    const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}})
     stream.getTracks().forEach(t => pc.addTrack(t, stream))
     
     // connect audio / video
