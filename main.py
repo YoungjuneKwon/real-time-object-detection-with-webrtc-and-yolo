@@ -24,13 +24,14 @@ class YOLOVideoStreamTrack(VideoStreamTrack):
     """
     A video track thats returns camera track with annotated detected objects.
     """
-    def __init__(self, conf_thres=0.7, iou_thres=0.5):
+    def __init__(self, track=None, conf_thres=0.7, iou_thres=0.5):
         super().__init__()  # don't forget this!
         self.conf_threshold = conf_thres
         self.iou_threshold = iou_thres
 
         video = cv2.VideoCapture(0)
         self.video = video
+        self.track = track
 
         # Initialize model
         self.net = cv2.dnn.readNet(model)
@@ -45,7 +46,11 @@ class YOLOVideoStreamTrack(VideoStreamTrack):
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
-        _, frame = self.video.read()
+        if self.track:
+            frame = await self.track.recv()
+            frame = frame.to_ndarray(format="bgr24")
+        else:
+            _, frame = self.video.read()
         boxes, scores, class_ids = self.detect(frame)
         frame = self.draw_detections(frame, boxes, scores, class_ids)
         frame = VideoFrame.from_ndarray(frame, format="bgr24")
@@ -177,7 +182,7 @@ def add_event_handler_for_relay_track_on_peer_connection(pc):
     def on_track(track):
         print("Track %s received" % track.kind)
         if track.kind == "video":
-            pc.addTrack(relay.subscribe(track))
+            pc.addTrack(YOLOVideoStreamTrack(relay.subscribe(track)))
 
 async def offer(request):
     params = await request.json()
