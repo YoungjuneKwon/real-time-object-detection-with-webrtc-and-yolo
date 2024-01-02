@@ -170,30 +170,20 @@ async def myIceServers(request):
     content = open(os.path.join(ROOT, "myIceServers.json"), "r").read()
     return web.Response(content_type="application/json", text=content)
 
-async def save_to_file(track):
-    print('Saving to file')
-    video = cv2.VideoWriter('test.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, (640, 480))
-    idx = 0
-    while True:
-        print(f'Waiting for frame {idx}')
-        frame = await track.recv()
-        print(f'Frame {idx} received')
-        idx += 1
-        video.write(frame.to_ndarray(format="bgr24"))
-
-def add_event_handler_for_new_track_on_peer_connection(pc):
+def add_event_handler_for_relay_track_on_peer_connection(pc):
+    relay = MediaRelay()
     @pc.on("track")
     def on_track(track):
         print("Track %s received" % track.kind)
         if track.kind == "video":
-            asyncio.create_task(save_to_file(track))
-            
+            pc.addTrack(relay.subscribe(track))
+
 async def offer(request):
     params = await request.json()
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
 
     pc = RTCPeerConnection()
-    add_event_handler_for_new_track_on_peer_connection(pc)
+    add_event_handler_for_relay_track_on_peer_connection(pc)
     pcs.add(pc)
 
     @pc.on("connectionstatechange")
@@ -202,11 +192,6 @@ async def offer(request):
         if pc.connectionState == "failed":
             await pc.close()
             pcs.discard(pc)
-
-    # open media source
-    #video = create_local_tracks()
-    #if video:
-    #    pc.addTrack(YOLOVideoStreamTrack())
 
     await pc.setRemoteDescription(offer)
 
