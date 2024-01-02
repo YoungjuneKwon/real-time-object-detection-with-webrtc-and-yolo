@@ -24,13 +24,11 @@ class YOLOVideoStreamTrack(VideoStreamTrack):
     """
     A video track thats returns camera track with annotated detected objects.
     """
-    def __init__(self, track=None, conf_thres=0.7, iou_thres=0.5):
+    def __init__(self, track, conf_thres=0.7, iou_thres=0.5):
         super().__init__()  # don't forget this!
         self.conf_threshold = conf_thres
         self.iou_threshold = iou_thres
 
-        video = cv2.VideoCapture(0)
-        self.video = video
         self.track = track
 
         # Initialize model
@@ -43,22 +41,40 @@ class YOLOVideoStreamTrack(VideoStreamTrack):
         self.colors = np.random.default_rng(3).uniform(0, 255, size=(len(self.class_names), 3))
                 
         self.output_names = self.net.getUnconnectedOutLayersNames()
+        self.input_frame = None
+        self.flag_proceed = False
+        self.output_frame = None
+        asyncio.create_task(self.store_input_frame())
+        asyncio.create_task(self.process_output_frame())
+
+    async def store_input_frame(self):
+        while True:
+            frame = await self.track.recv()
+            self.input_frame = frame.to_ndarray(format="bgr24")
+            self.flag_proceed = False
+
+    async def process_output_frame(self):
+        while self.input_frame is None:
+            await asyncio.sleep(0.2)
+        while True:
+            while self.flag_proceed:
+                await asyncio.sleep(0.2)
+                continue
+            pts, time_base = await self.next_timestamp()
+            frame = self.input_frame
+            boxes, scores, class_ids = self.detect(frame)
+            frame = self.draw_detections(frame, boxes, scores, class_ids)
+            frame = VideoFrame.from_ndarray(frame, format="bgr24")
+            frame.pts = pts
+            frame.time_base = time_base
+            self.output_frame = frame
+            self.flag_proceed = True
 
     async def recv(self):
-        pts, time_base = await self.next_timestamp()
-        if self.track:
-            frame = await self.track.recv()
-            frame = frame.to_ndarray(format="bgr24")
-        else:
-            _, frame = self.video.read()
-        boxes, scores, class_ids = self.detect(frame)
-        frame = self.draw_detections(frame, boxes, scores, class_ids)
-        frame = VideoFrame.from_ndarray(frame, format="bgr24")
-        frame.pts = pts
-        frame.time_base = time_base
-        return frame
-
-        
+        while self.output_frame is None:
+            await asyncio.sleep(0.2)
+        return self.output_frame
+ 
     def prepare_input(self, image):
         self.img_height, self.img_width = image.shape[:2]
         
