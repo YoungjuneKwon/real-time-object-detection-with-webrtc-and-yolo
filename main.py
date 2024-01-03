@@ -40,21 +40,31 @@ class YOLOVideoStreamTrack(VideoStreamTrack):
         self.input_frame = None
         self.flag_proceed = False
         self.output_frame = None
+        self.running = True
         asyncio.create_task(self.store_input_frame())
         asyncio.create_task(self.process_output_frame())
 
+    def stop(self):
+        """ Stop """
+        self.running = False
+
     async def store_input_frame(self):
         """ Store input frame """
-        while True:
-            frame = await self.track.recv()
-            self.input_frame = frame.to_ndarray(format="bgr24")
-            self.flag_proceed = False
+        try:
+            while self.running:
+                frame = await self.track.recv()
+                self.input_frame = frame.to_ndarray(format="bgr24")
+                self.flag_proceed = False
+        # pylint: disable=broad-exception-caught
+        except Exception as err:
+            print(err)
+            self.stop()
 
     async def process_output_frame(self):
         """ Process output frame """
         while self.input_frame is None:
             await asyncio.sleep(0.2)
-        while True:
+        while self.running:
             while self.flag_proceed:
                 await asyncio.sleep(0.2)
                 continue
@@ -187,43 +197,69 @@ async def my_ice_servers(_):
         content = f.read()
     return web.Response(content_type="application/json", text=content)
 
+class PeerConnectionContext:
+    """ PeerConnection context """
+    pool = set()
+
+    @staticmethod
+    async def clear():
+        """ Clear """
+        coros = [pcc.close() for pcc in PeerConnectionContext.pool]
+        await asyncio.gather(*coros)
+        PeerConnectionContext.pool.clear()
+
+    def __init__(self, sdp, peer_type):
+        """ Initialize """
+        self.sdp = sdp
+        self.type = peer_type
+        self.pc = RTCPeerConnection()
+        self.stream_processor = None
+        PeerConnectionContext.pool.add(self)
+        self.init_event_handlers()
+        self.handshake_offer_answer()
+
+    def init_event_handlers(self):
+        """ Initialize event handlers """
+        @self.pc.on("track")
+        def on_track(track):
+            """ On track """
+            if track.kind == "video":
+                self.stream_processor = YOLOVideoStreamTrack(track)
+                self.pc.addTrack(self.stream_processor)
+
+        @self.pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            """ On connection state change """
+            print(f"Connection state is {self.pc.connectionState}")
+            if self.pc.connectionState == "failed":
+                await self.close()
+                PeerConnectionContext.pool.discard(self)
+
+    async def handshake_offer_answer(self):
+        """ Handshake offer answer """
+        offer = RTCSessionDescription(sdp=self.sdp, type=self.type)
+        await self.pc.setRemoteDescription(offer)
+        answer = await self.pc.createAnswer()
+        await self.pc.setLocalDescription(answer)
+        return self.pc.localDescription
+
+    async def close(self):
+        """ Close """
+        self.stream_processor.stop()
+        return await self.pc.close()
+
 async def on_offer(request):
     """ WebRTC offer """
     params = await request.json()
-    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-    pcs.add(pc := RTCPeerConnection())
+    ld = await (PeerConnectionContext(params["sdp"], params["type"])
+                  .handshake_offer_answer())
 
-    @pc.on("track")
-    def on_track(track):
-        if track.kind == "video":
-            pc.addTrack(YOLOVideoStreamTrack(track))
-
-    @pc.on("connectionstatechange")
-    async def on_connectionstatechange():
-        print(f"Connection state is {pc.connectionState}")
-        if pc.connectionState == "failed":
-            await pc.close()
-            pcs.discard(pc)
-
-    await pc.setRemoteDescription(offer)
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-
-    return web.Response(
-        content_type="application/json",
-        text=json.dumps(
-            {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
-        ),
-    )
-
-pcs = set()
+    return web.Response(content_type="application/json",
+        text=json.dumps({"sdp": ld.sdp, "type": ld.type}))
 
 async def on_shutdown(_):
     """ Close peer connections """
-    # close peer connections
-    coros = [pc.close() for pc in pcs]
-    await asyncio.gather(*coros)
-    pcs.clear()
+    await PeerConnectionContext.clear()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="WebRTC webcam demo")
